@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-
 function setupPasswordToggle() {
     const toggleBtns = document.querySelectorAll('#togglePassword');
 
@@ -2804,33 +2802,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
 });
-
-
-=======
-
-function setupPasswordToggle() {
-    const toggleBtns = document.querySelectorAll('#togglePassword');
-
-    toggleBtns.forEach((toggleBtn) => {
-        const wrapper = toggleBtn.closest('.password-wrapper');
-        const passwordInput = wrapper.querySelector('input[type="password"], input[type="text"]');
-        const eyeIcon = toggleBtn.querySelector('i');
-
-        if (toggleBtn && passwordInput && eyeIcon) {
-            toggleBtn.addEventListener('click', () => {
-                const isPassword = passwordInput.type === 'password';
-                passwordInput.type = isPassword ? 'text' : 'password';
-
-                eyeIcon.classList.toggle('fa-eye');
-                eyeIcon.classList.toggle('fa-eye-slash');
-            });
-        }
-    });
-}
-
-/* Fin de la sección para el ojo */
-/* Fin de la sección para el ojo */
-
 
 const STORAGE = {
   SESSION: "peje_session",
@@ -5713,4 +5684,3 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 
->>>>>>> 52f52df (Primer commit Peje Tickets)
