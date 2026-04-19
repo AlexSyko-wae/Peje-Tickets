@@ -241,15 +241,42 @@ def obtener_eventos_disponibles():
         conexion.close()
 
 
-def comprar_boleto(usuario_id, evento_id, cantidad=1, metodo='Tarjeta'):
+def obtener_asientos_disponibles(evento_id):
     conexion = get_connection()
     cursor = conexion.cursor(dictionary=True)
     try:
         cursor.execute(
-            "SELECT id, precio FROM Boletos WHERE evento_id = %s AND estado = 'Disponible' LIMIT %s",
-            (evento_id, cantidad)
+            "SELECT id, asiento, precio FROM Boletos WHERE evento_id = %s AND estado = 'Disponible' ORDER BY id",
+            (evento_id,)
         )
-        boletos = cursor.fetchall()
+        rows = cursor.fetchall()
+        for index, row in enumerate(rows, start=1):
+            if not row.get("asiento"):
+                row["asiento"] = f"Asiento {index}"
+        return {"success": True, "data": rows}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+def comprar_boleto(usuario_id, evento_id=None, cantidad=1, metodo='Tarjeta', boleto_id=None):
+    conexion = get_connection()
+    cursor = conexion.cursor(dictionary=True)
+    try:
+        if boleto_id is not None:
+            cursor.execute(
+                "SELECT id, precio, evento_id FROM Boletos WHERE id = %s AND estado = 'Disponible'",
+                (boleto_id,)
+            )
+            boletos = cursor.fetchall()
+        else:
+            cursor.execute(
+                "SELECT id, precio FROM Boletos WHERE evento_id = %s AND estado = 'Disponible' LIMIT %s",
+                (evento_id, cantidad)
+            )
+            boletos = cursor.fetchall()
         if not boletos or len(boletos) < cantidad:
             return {"success": False, "error": "No hay suficientes boletos disponibles."}
 
@@ -263,9 +290,12 @@ def comprar_boleto(usuario_id, evento_id, cantidad=1, metodo='Tarjeta'):
         boleto_ids = [boleto["id"] for boleto in boletos]
         placeholders = ",".join(["%s"] * len(boleto_ids))
         cursor.execute(
-            f"UPDATE Boletos SET orden_id = %s, estado = 'Vendido' WHERE id IN ({placeholders})",
+            f"UPDATE Boletos SET orden_id = %s, estado = 'Vendido' WHERE id IN ({placeholders}) AND estado = 'Disponible'",
             tuple([orden_id] + boleto_ids)
         )
+        if cursor.rowcount != len(boleto_ids):
+            conexion.rollback()
+            return {"success": False, "error": "El asiento seleccionado ya no está disponible."}
 
         cursor.execute(
             "INSERT INTO Pagos (orden_id, monto, metodo, estado, fechaPago, referenciaTransaccion) VALUES (%s, %s, %s, 'Completado', NOW(), UUID())",

@@ -2845,6 +2845,9 @@ let stripeClient = null;
 let stripeElements = null;
 let stripeCardElement = null;
 let stripeCardMounted = false;
+let selectedBoletoId = null;
+let selectedSeatLabel = null;
+let seatsLoadedEventId = null;
 
 function apiUrl(path) {
   const p = path.startsWith("/") ? path : `/${path}`;
@@ -2911,18 +2914,22 @@ async function apiPostGenerarBoletos(eventoId, precio) {
   return { ok: res.ok, data };
 }
 
-async function apiComprarBoletos(eventoId, usuarioId, cantidad = 1, metodo = "Stripe") {
+async function apiComprarBoletos(eventoId, usuarioId, cantidad = 1, metodo = "Stripe", boletoId = null) {
+  const payload = { evento_id: eventoId, usuario_id: usuarioId, cantidad, metodo };
+  if (boletoId) payload.boleto_id = boletoId;
   const { res, data } = await apiFetchJson("/api/comprar-boleto", {
     method: "POST",
-    body: JSON.stringify({ evento_id: eventoId, usuario_id: usuarioId, cantidad, metodo })
+    body: JSON.stringify(payload)
   });
   return { ok: res.ok, data };
 }
 
-async function apiCreatePaymentIntent(eventoId, cantidad = 1) {
+async function apiCreatePaymentIntent(eventoId, cantidad = 1, boletoId = null) {
+  const payload = { evento_id: eventoId, cantidad };
+  if (boletoId) payload.boleto_id = boletoId;
   const { res, data } = await apiFetchJson("/api/create-payment-intent", {
     method: "POST",
-    body: JSON.stringify({ evento_id: eventoId, cantidad })
+    body: JSON.stringify(payload)
   });
   return { ok: res.ok, data };
 }
@@ -3026,6 +3033,71 @@ function clearStripeCardErrors() {
   el.classList.add("hidden");
 }
 
+function renderSeatSelection(seats) {
+  const container = document.getElementById("seatSelectionContainer");
+  const selectedInfo = document.getElementById("selectedSeatInfo");
+  const paymentLabel = document.getElementById("paymentAmountLabel");
+  const confirmBtn = document.querySelector(".btn-confirm-payment");
+
+  if (!container) return;
+  if (!seats || seats.length === 0) {
+    container.innerHTML = '<p class="muted">No hay asientos disponibles para este evento.</p>';
+    if (selectedInfo) selectedInfo.textContent = "";
+    if (confirmBtn) confirmBtn.disabled = true;
+    return;
+  }
+
+  container.innerHTML = seats
+    .map(
+      (seat) => `
+        <button type="button" class="seat ${seat.id === selectedBoletoId ? "seat-selected" : "seat-available"}" data-seat-id="${seat.id}" data-seat-label="${escapeHtml(seat.asiento)}" data-seat-price="${seat.precio}">
+          ${escapeHtml(seat.asiento)}
+          <span class="seat-price">$${Number(seat.precio).toFixed(2)}</span>
+        </button>`
+    )
+    .join("");
+
+  const buttons = container.querySelectorAll(".seat");
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => {
+      buttons.forEach((btn) => btn.classList.remove("seat-selected"));
+      button.classList.add("seat-selected");
+      selectedBoletoId = Number(button.dataset.seatId);
+      selectedSeatLabel = button.dataset.seatLabel || "";
+      if (selectedInfo) {
+        selectedInfo.textContent = `Asiento seleccionado: ${selectedSeatLabel}`;
+      }
+      if (paymentLabel) {
+        const price = Number(button.dataset.seatPrice || 0);
+        paymentLabel.textContent = `Total a pagar: $${price.toFixed(2)}`;
+      }
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.dataset.boletoId = String(selectedBoletoId);
+      }
+    });
+  });
+}
+
+async function loadSeatsForEvent(eventId) {
+  const container = document.getElementById("seatSelectionContainer");
+  const selectedInfo = document.getElementById("selectedSeatInfo");
+  if (!container) return;
+  container.innerHTML = '<p class="muted">Cargando asientos...</p>';
+  selectedBoletoId = null;
+  selectedSeatLabel = null;
+  seatsLoadedEventId = eventId;
+  const { res, data } = await apiFetchJson(`/api/asientos-disponibles/${eventId}`, { method: "GET" });
+  if (!res || !res.ok || !data || !data.success) {
+    const errorMessage = data && data.error ? data.error : res && !res.ok ? `HTTP ${res.status}` : "Error desconocido";
+    console.warn("Error cargando asientos:", { status: res && res.status, data });
+    container.innerHTML = `<p class="muted">No se pudo cargar la lista de asientos. ${escapeHtml(errorMessage)}</p>`;
+    if (selectedInfo) selectedInfo.textContent = "";
+    return;
+  }
+  renderSeatSelection(data.data || []);
+}
+
 async function initStripeCard() {
   if (stripeCardMounted) return true;
   if (typeof Stripe === "undefined") {
@@ -3059,6 +3131,7 @@ async function initStripeCard() {
     return false;
   }
   stripeCardElement.mount(mount);
+  stripeCardElement.focus();
   stripeCardMounted = true;
 
   stripeCardElement.on("change", (event) => {
@@ -3072,22 +3145,39 @@ async function initStripeCard() {
 }
 
 async function showPaymentSection(event) {
+  if (!selectedBoletoId) {
+    showToast("Selecciona un asiento antes de pagar.", "error");
+    return;
+  }
+
   const paymentSection = document.getElementById("stripePaymentSection");
   if (!paymentSection) return;
   paymentSection.classList.remove("hidden");
   const paymentTitle = document.getElementById("paymentAmountLabel");
   if (paymentTitle) {
-    paymentTitle.textContent = event.precioMin > 0 ? `Total a pagar: $${event.precioMin.toFixed(2)}` : "Total a pagar: $0.00";
+    const seatPrice = document.querySelector(".seat-selected")?.dataset?.seatPrice;
+    if (seatPrice) {
+      paymentTitle.textContent = `Total a pagar: $${Number(seatPrice).toFixed(2)}`;
+    } else {
+      paymentTitle.textContent = event.precioMin > 0 ? `Total a pagar: $${event.precioMin.toFixed(2)}` : "Total a pagar: $0.00";
+    }
   }
   const confirmBtn = paymentSection.querySelector(".btn-confirm-payment");
   if (confirmBtn) {
-    confirmBtn.dataset.id = event.id;
-    confirmBtn.dataset.amount = Math.round((event.precioMin || 0) * 100);
+    confirmBtn.dataset.eventId = event.id;
+    confirmBtn.dataset.boletoId = String(selectedBoletoId);
+    confirmBtn.disabled = false;
   }
+
+  const startPaymentBtn = paymentSection.closest(".modal-card")?.querySelector(".btn-start-payment");
+  if (startPaymentBtn) {
+    startPaymentBtn.style.display = "none";
+  }
+
   await initStripeCard();
 }
 
-async function confirmStripePayment(eventId) {
+async function confirmStripePayment(eventId, boletoId) {
   const session = getSession();
   if (!session || !session.userId) {
     showToast("Necesitas iniciar sesión para completar el pago.", "error");
@@ -3098,13 +3188,17 @@ async function confirmStripePayment(eventId) {
     showToast("Evento no encontrado.", "error");
     return;
   }
+  if (!boletoId) {
+    showToast("No se seleccionó un asiento para el pago.", "error");
+    return;
+  }
   if (event.precioMin <= 0) {
     showToast("No se encontró un precio válido para el evento.", "error");
     return;
   }
   clearStripeCardErrors();
 
-  const { ok, data } = await apiCreatePaymentIntent(eventId, 1);
+  const { ok, data } = await apiCreatePaymentIntent(eventId, 1, boletoId);
   if (!ok || !data || !data.success) {
     showToast("No se pudo iniciar el pago: " + (data?.error || "Error desconocido"), "error");
     return;
@@ -3131,7 +3225,7 @@ async function confirmStripePayment(eventId) {
     return;
   }
   if (result.paymentIntent && result.paymentIntent.status === "succeeded") {
-    const { ok: bought, data: buyData } = await apiComprarBoletos(eventId, session.userId, 1, "Stripe");
+    const { ok: bought, data: buyData } = await apiComprarBoletos(eventId, session.userId, 1, "Stripe", boletoId);
     if (bought && buyData && buyData.success) {
       showToast("Pago realizado y boleto reservado correctamente.", "success");
       closeEventDetailModal();
@@ -3199,6 +3293,11 @@ function renderEventDetailModal(event) {
             <p>${event.precioMin > 0 ? `$${event.precioMin.toFixed(2)} MXN` : "Precio disponible"}</p>
           </div>
         </div>
+        <div class="seat-selection-panel" style="margin-top: 16px;">
+          <h4>Selecciona tu asiento</h4>
+          <div id="seatSelectionContainer" class="seat-grid"></div>
+          <p id="selectedSeatInfo" class="muted" style="margin-top: 8px;">Selecciona un asiento disponible para continuar.</p>
+        </div>
         <div id="stripePaymentSection" class="hidden" style="margin-top:1.25rem;">
           <h4>Pago con tarjeta</h4>
           <div class="field">
@@ -3208,15 +3307,13 @@ function renderEventDetailModal(event) {
           </div>
           <p id="paymentAmountLabel" class="muted" style="margin-top: 8px; margin-bottom: 12px;"></p>
           <div class="modal-actions">
-            <button type="button" class="btn btn-secondary btn-sm modal-close">Cerrar</button>
-            <button type="button" class="btn btn-primary btn-sm btn-confirm-payment" data-id="${event.id}" data-amount="${Math.round((event.precioMin || 0) * 100)}">
+            <button type="button" class="btn btn-primary btn-sm btn-confirm-payment" data-event-id="${event.id}" data-boleto-id="" disabled>
               Confirmar pago
             </button>
           </div>
         </div>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary btn-sm modal-close">Cerrar</button>
         <button type="button" class="btn btn-primary btn-sm btn-start-payment" data-id="${event.id}" ${event.disponibles <= 0 || event.precioMin <= 0 ? "disabled" : ""}>
           ${event.disponibles > 0 ? "Pagar con Stripe" : "Agotado"}
         </button>
@@ -3238,6 +3335,7 @@ function openEventDetailModal(event) {
   });
   modal.setAttribute("aria-hidden", "false");
   backdrop.setAttribute("aria-hidden", "false");
+  loadSeatsForEvent(event.id).catch(() => {});
 }
 
 function closeEventDetailModal() {
@@ -4919,8 +5017,9 @@ function setupContentDelegation() {
 
     const confirmPaymentBtn = t.closest(".btn-confirm-payment");
     if (confirmPaymentBtn) {
-      const eventId = Number(confirmPaymentBtn.dataset.id);
-      confirmStripePayment(eventId);
+      const eventId = Number(confirmPaymentBtn.dataset.eventId);
+      const boletoId = Number(confirmPaymentBtn.dataset.boletoId);
+      confirmStripePayment(eventId, boletoId);
       return;
     }
 

@@ -107,6 +107,52 @@ body {
   min-height: 44px;
 }
 
+.seat-selection-panel {
+  background: rgba(255,255,255,0.96);
+  border: 1px solid rgba(148,163,184,0.25);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.seat {
+  border: 1px solid #bfc7d5;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px 12px;
+  color: #0f172a;
+  cursor: pointer;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.seat:hover {
+  transform: translateY(-1px);
+  border-color: #60a5fa;
+  box-shadow: 0 4px 12px rgba(59,130,246,0.16);
+}
+
+.seat-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.seat-price {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
 .StripeElement--focus {
   border-color: #38bdf8 !important;
   box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.15) !important;

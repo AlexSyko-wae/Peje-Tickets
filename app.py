@@ -14,7 +14,7 @@ from procedures import (
     generar_reporte_ventas, enviar_notificacion, supervisar_eventos,
     administrar_boletos, consultar_ventas, validar_qr, generar_reporte_pagos, exportar_pdf,
     generar_reporte_asistencia, actualizar_estado,
-    generar_boletos, marcar_usado, generar_reportes
+    generar_boletos, marcar_usado, generar_reportes, obtener_asientos_disponibles
 )
 
 app = Flask(__name__)
@@ -202,6 +202,13 @@ def api_eventos_disponibles():
         return jsonify(result), 200
     return jsonify(result), 500
 
+@app.route("/api/asientos-disponibles/<int:evento_id>", methods=["GET"])
+def api_asientos_disponibles(evento_id):
+    result = obtener_asientos_disponibles(evento_id)
+    if result["success"]:
+        return jsonify(result), 200
+    return jsonify(result), 500
+
 @app.route("/api/comprar-boleto", methods=["POST"])
 def api_comprar_boleto():
     data = request.json
@@ -209,7 +216,8 @@ def api_comprar_boleto():
         data.get("usuario_id"),
         data.get("evento_id"),
         data.get("cantidad", 1),
-        data.get("metodo", "Stripe")
+        data.get("metodo", "Stripe"),
+        data.get("boleto_id")
     )
     if result["success"]:
         return jsonify(result), 200
@@ -219,20 +227,30 @@ def api_comprar_boleto():
 def api_create_payment_intent():
     data = request.json or {}
     evento_id = data.get("evento_id")
+    boleto_id = data.get("boleto_id")
     cantidad = int(data.get("cantidad", 1))
-    if not evento_id:
-        return jsonify({"success": False, "error": "Evento no especificado."}), 400
+    if not evento_id and not boleto_id:
+        return jsonify({"success": False, "error": "Evento o boleto no especificado."}), 400
 
     connection = db.get_connection()
     cursor = connection.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT precio FROM Boletos WHERE evento_id = %s AND estado = 'Disponible' LIMIT %s",
-            (evento_id, cantidad)
-        )
-        boletos = cursor.fetchall()
-        if not boletos or len(boletos) < cantidad:
-            return jsonify({"success": False, "error": "No hay suficientes boletos disponibles."}), 400
+        if boleto_id is not None:
+            cursor.execute(
+                "SELECT precio, evento_id FROM Boletos WHERE id = %s AND estado = 'Disponible'",
+                (boleto_id,)
+            )
+            boletos = cursor.fetchall()
+            if not boletos:
+                return jsonify({"success": False, "error": "El asiento seleccionado no está disponible."}), 400
+        else:
+            cursor.execute(
+                "SELECT precio FROM Boletos WHERE evento_id = %s AND estado = 'Disponible' LIMIT %s",
+                (evento_id, cantidad)
+            )
+            boletos = cursor.fetchall()
+            if not boletos or len(boletos) < cantidad:
+                return jsonify({"success": False, "error": "No hay suficientes boletos disponibles."}), 400
 
         total = sum(float(boleto["precio"] or 0) for boleto in boletos)
         amount = int(round(total * 100))
@@ -243,11 +261,18 @@ def api_create_payment_intent():
         if not stripe.api_key:
             return jsonify({"success": False, "error": "Falta la clave secreta de Stripe en el servidor."}), 500
 
+        metadata = {"cantidad": str(cantidad)}
+        if boleto_id is not None:
+            metadata["boleto_id"] = str(boleto_id)
+            metadata["evento_id"] = str(boletos[0]["evento_id"])
+        else:
+            metadata["evento_id"] = str(evento_id)
+
         intent = stripe.PaymentIntent.create(
             amount=amount,
             currency="mxn",
             payment_method_types=["card"],
-            metadata={"evento_id": str(evento_id), "cantidad": str(cantidad)}
+            metadata=metadata
         )
 
         return jsonify({"success": True, "client_secret": intent.client_secret, "amount": amount, "currency": "mxn"}), 200
